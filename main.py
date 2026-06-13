@@ -63,33 +63,48 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_station_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 	query = update.callback_query
-	await query.answer()  # Acknowledge callback query to remove "loading"
-
+	await query.answer()  # Acknowledge callback query
+	
 	station_id = query.data
 	stations = latest_data['data']['stations']
 	station_map = {s['id']: s['name'] for s in stations}
-
+	
 	readings = latest_data['data']['readings'][0]
 	rainfall_value = None
 	for reading in readings['data']:
 		if reading['stationId'] == station_id:
 			rainfall_value = reading['value']
 			break
-
+	
 	if rainfall_value is None:
 		await query.edit_message_text(f"No rainfall data found for station {station_id}.")
-		return ConversationHandler.END
-
+		return CHOOSING_STATION
+	
 	formatted_time = format_timestamp(readings['timestamp'])
-
+	
 	reply = (
 		f"Rainfall reading for {station_map[station_id]} ({station_id})\n"
 		f"at {formatted_time}:\n"
-		f"{rainfall_value} {latest_data['data']['readingUnit']}"
+		f"{rainfall_value} {latest_data['data']['readingUnit']}\n\n"
+		"Choose another station or /cancel to stop."
 	)
-	await query.edit_message_text(reply)
+	
+	# Build the station buttons again
+	buttons = []
+	row = []
+	for i, station in enumerate(stations, start=1):
+		row.append(InlineKeyboardButton(station['name'], callback_data=station['id']))
+		if i % 3 == 0:
+			buttons.append(row)
+			row = []
+	if row:
+		buttons.append(row)
+	reply_markup = InlineKeyboardMarkup(buttons)
+	
+	await query.edit_message_text(reply, reply_markup=reply_markup)
+	
+	return CHOOSING_STATION
 
-	return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 	await update.message.reply_text("Operation cancelled.")
