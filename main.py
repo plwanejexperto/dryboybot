@@ -17,10 +17,21 @@ logger = logging.getLogger(__name__)
 
 CHOOSING_STATION = 1
 
-latest_data = None
+latest_rainfall_data = None
+latest_temperature_data = None
 
 def get_rainfall_data(date=None):
 	base_url = "https://api-open.data.gov.sg/v2/real-time/api/rainfall"
+	params = {}
+	if date:
+		params['date'] = date
+	
+	response = requests.get(base_url, params=params)
+	response.raise_for_status()
+	return response.json()
+
+def get_temperature_data(date=None):
+	base_url = "https://api-open.data.gov.sg/v2/real-time/api/air-temperature"
 	params = {}
 	if date:
 		params['date'] = date
@@ -37,15 +48,14 @@ def format_timestamp(ts):
 		return dt.strftime("Date and time: %B %#d, %Y, at %#I:%M %p SGT")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-	global latest_data
-	latest_data = get_rainfall_data()
-	stations = latest_data['data']['stations']
+	global latest_rainfall_data, latest_temperature_data
+	latest_rainfall_data = get_rainfall_data()
+	latest_temperature_data = get_temperature_data()
+	stations = latest_rainfall_data['data']['stations']
 
-	# Prepare buttons in rows of 3 (adjust as needed)
 	buttons = []
 	row = []
 	for i, station in enumerate(stations, start=1):
-		# Use station id as callback_data so we know which one was clicked
 		row.append(InlineKeyboardButton(station['name'], callback_data=station['id']))
 		if i % 3 == 0:
 			buttons.append(row)
@@ -63,33 +73,39 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_station_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 	query = update.callback_query
-	await query.answer()  # Acknowledge callback query
+	await query.answer()
 	
 	station_id = query.data
-	stations = latest_data['data']['stations']
+	stations = latest_rainfall_data['data']['stations']
 	station_map = {s['id']: s['name'] for s in stations}
 	
-	readings = latest_data['data']['readings'][0]
-	rainfall_value = None
-	for reading in readings['data']:
-		if reading['stationId'] == station_id:
-			rainfall_value = reading['value']
-			break
+	readings_rainfall = latest_rainfall_data['data']['readings'][0]['data']
+	readings_temperature = latest_temperature_data['data']['readings'][0]['data']
+	
+	rainfall_value = next((r['value'] for r in readings_rainfall if r['stationId'] == station_id), None)
+	temperature_value = next((t['value'] for t in readings_temperature if t['stationId'] == station_id), None)
 	
 	if rainfall_value is None:
-		await query.edit_message_text(f"No rainfall data found for station {station_id}.")
-		return CHOOSING_STATION
+		rainfall_value = "N/A"
+	if temperature_value is None:
+		temperature_value = "N/A"
 	
-	formatted_time = format_timestamp(readings['timestamp'])
+	timestamp_rainfall = latest_rainfall_data['data']['readings'][0]['timestamp']
+	formatted_time = format_timestamp(timestamp_rainfall)
 	
+	# Compose the reply text
 	reply = (
 		f"Rainfall reading for {station_map[station_id]} ({station_id})\n"
 		f"at {formatted_time}:\n"
-		f"{rainfall_value} {latest_data['data']['readingUnit']}\n\n"
-		"Choose another station or /cancel to stop."
+		f"🌧 Rainfall: {rainfall_value} {latest_rainfall_data['data']['readingUnit']}\n"
 	)
 	
-	# Build the station buttons again
+	if temperature_value != "N/A":
+		reply += f"🌡 Temperature: {temperature_value} {latest_temperature_data['data']['readingUnit']}\n"
+	
+	reply += "\nChoose another station if you want:"
+	
+	# Prepare buttons again for re-selection
 	buttons = []
 	row = []
 	for i, station in enumerate(stations, start=1):
@@ -101,10 +117,10 @@ async def handle_station_choice(update: Update, context: ContextTypes.DEFAULT_TY
 		buttons.append(row)
 	reply_markup = InlineKeyboardMarkup(buttons)
 	
-	await query.edit_message_text(reply, reply_markup=reply_markup)
+	await query.edit_message_text(text=reply, reply_markup=reply_markup)
 	
+	# Stay in the same conversation state so user can pick again
 	return CHOOSING_STATION
-
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 	await update.message.reply_text("Operation cancelled.")
